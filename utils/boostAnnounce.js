@@ -5,8 +5,7 @@ const logger = require('./logger');
 
 /* ─────────────── Boost card settings ─────────────── */
 
-const SERVER_NAME  = 'Astral';
-const SERVER_EMOJI = '🎃';
+const SERVER_EMOJI = '';   // optional emoji before the server name ('' = none)
 const BULLET       = '▼';
 const EMBED_COLOR  = 0x0b0b0f;
 const BANNER_IMAGE =
@@ -30,6 +29,7 @@ function fancy(text) {
 }
 
 function buildBoostEmbed(user, guild) {
+  const name = guild.name || 'this server';
   const description = [
     `### ${BULLET} ──── SERVER BOOST ────`,
     `**Thank you for boosting <@${user.id}>!**`,
@@ -46,7 +46,7 @@ function buildBoostEmbed(user, guild) {
     .setDescription(description)
     .setThumbnail(user.displayAvatarURL({ extension: 'png', size: 256 }))
     .setImage(BANNER_IMAGE)
-    .setFooter({ text: `${SERVER_NAME.toUpperCase()} Boost™ • ${SERVER_EMOJI} ${fancy(SERVER_NAME)}` });
+    .setFooter({ text: `${name.toUpperCase()} Boost™ • ${[SERVER_EMOJI, fancy(name)].filter(Boolean).join(' ')}` });
 }
 
 async function onMessage(message) {
