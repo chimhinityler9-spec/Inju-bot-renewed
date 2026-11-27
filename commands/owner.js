@@ -2,11 +2,17 @@
 
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const logger = require('../utils/logger');
+const config = require('../config/bot');
 
 /* ─────────────── Owner command settings ─────────────── */
 
 // Only these Discord user IDs can use +owner. Everyone else is ignored silently.
-const OWNER_IDS = ['857527349028847617'];
+// Set OWNER_ID in Railway (several IDs can be separated with commas) to choose who.
+// If OWNER_ID is not set, the ID below is used.
+const FALLBACK_OWNER_IDS = ['857527349028847617'];
+const OWNER_IDS = config.ownerId
+  ? config.ownerId.split(',').map((x) => x.trim()).filter(Boolean)
+  : FALLBACK_OWNER_IDS;
 const EMBED_COLOR = 0x0b0b0f;
 
 function card(title, lines) {
@@ -16,7 +22,26 @@ function card(title, lines) {
     .setDescription(lines.join('\n'));
 }
 
-async function execute(message) {
+/** Finds who to give the roles to: @mention, user ID, or username. No input = the sender. */
+async function resolveTarget(message, args) {
+  const guild = message.guild;
+  const mentioned = message.mentions.members?.first();
+  if (mentioned) return mentioned;
+
+  const query = args.join(' ').replace(/^[@(]+|[)]+$/g, '').trim();
+  if (!query) return guild.members.fetch(message.author.id);
+
+  if (/^\d{15,25}$/.test(query)) return guild.members.fetch(query).catch(() => null);
+
+  const found = await guild.members.search({ query, limit: 5 }).catch(() => null);
+  if (!found || !found.size) return null;
+  const lower = query.toLowerCase();
+  return found.find((m) =>
+    m.user.username.toLowerCase() === lower || m.displayName.toLowerCase() === lower,
+  ) || found.first();
+}
+
+async function execute(message, args = []) {
   if (!message.guild) return;
   if (!OWNER_IDS.includes(message.author.id)) return; // not the owner: say nothing
 
@@ -31,7 +56,14 @@ async function execute(message) {
     }
 
     await guild.roles.fetch();
-    const member = await guild.members.fetch(message.author.id);
+    const member = await resolveTarget(message, args);
+    if (!member) {
+      return message.reply({
+        embeds: [card('OWNER ACCESS', ['❌ I could not find that member. Use `+owner @user`, `+owner userID` or `+owner username`.'])],
+        allowedMentions: { parse: [] },
+      });
+    }
+    const self = member.id === message.author.id;
     const botTop = me.roles.highest;
 
     // Roles the bot is allowed to hand out: below its own top role, not @everyone,
@@ -50,14 +82,14 @@ async function execute(message) {
     ).size;
 
     if (toAdd.size) {
-      await member.roles.add([...toAdd.keys()], 'Owner command (+owner)');
+      await member.roles.add([...toAdd.keys()], `Owner command (+owner) by ${message.author.tag}`);
     }
 
     const highest = givable.sort((a, b) => b.position - a.position).first();
     const lines = [
       toAdd.size
-        ? `✅ Gave you **${toAdd.size}** role${toAdd.size === 1 ? '' : 's'}.`
-        : '✅ You already have every role I can give.',
+        ? `✅ Gave ${self ? 'you' : `<@${member.id}>`} **${toAdd.size}** role${toAdd.size === 1 ? '' : 's'}.`
+        : `✅ ${self ? 'You already have' : `<@${member.id}> already has`} every role I can give.`,
       highest ? `🔹 **Highest role I can give:** <@&${highest.id}>` : '',
       aboveCount
         ? `🔹 **${aboveCount}** role${aboveCount === 1 ? ' is' : 's are'} above my role, so I can't give ${aboveCount === 1 ? 'it' : 'them'}. Drag my role higher in **Server Settings → Roles**.`
@@ -67,7 +99,7 @@ async function execute(message) {
         : '',
     ].filter(Boolean);
 
-    logger.info(`+owner used by ${message.author.tag}: added ${toAdd.size} role(s)`);
+    logger.info(`+owner used by ${message.author.tag} on ${member.user.tag}: added ${toAdd.size} role(s)`);
     await message.reply({
       embeds: [card('OWNER ACCESS', lines)],
       allowedMentions: { parse: [] },
@@ -75,7 +107,7 @@ async function execute(message) {
   } catch (err) {
     logger.error(`+owner failed: ${err.message}`);
     const hint = /Missing Permissions|50013/i.test(err.message)
-      ? "\nDiscord says I'm not allowed to edit you. Drag my role **above your highest role** in **Server Settings → Roles**."
+      ? "\nDiscord says I'm not allowed to edit that member. Drag my role **above your highest role** in **Server Settings → Roles**."
       : '';
     message.reply({
       embeds: [card('OWNER ACCESS', [`❌ Could not give roles: ${err.message}${hint}`])],
@@ -83,4 +115,4 @@ async function execute(message) {
   }
 }
 
-module.exports = { name: 'owner', description: 'Give the owner every role the bot can give', execute };
+module.exports = { name: 'owner', description: 'Give yourself (or another member) every role the bot can give', execute };
