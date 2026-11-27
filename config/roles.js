@@ -39,12 +39,18 @@ function hasRole(member, roleId) {
   return member.roles?.cache?.has(roleId) ?? false;
 }
 
+// Anyone with the Discord "Administrator" permission counts as staff and admin,
+// so the bot works in any server without matching the role IDs below.
+function isDiscordAdmin(member) {
+  return !!member?.permissions?.has?.('Administrator');
+}
+
 function hasAnyStaffRole(member) {
-  return STAFF_ROLES.some(id => hasRole(member, id));
+  return isDiscordAdmin(member) || STAFF_ROLES.some(id => hasRole(member, id));
 }
 
 function hasAnyAdminRole(member) {
-  return ADMIN_ROLES.some(id => hasRole(member, id));
+  return isDiscordAdmin(member) || ADMIN_ROLES.some(id => hasRole(member, id));
 }
 
 function getHighestStaffRole(member) {
