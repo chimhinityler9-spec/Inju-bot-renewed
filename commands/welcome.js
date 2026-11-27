@@ -5,9 +5,8 @@ const { toSmallCaps } = require('../utils/smallCaps');
 
 /* ─────────────── Welcome card settings ─────────────── */
 
-const SERVER_NAME   = 'Astral';       // shown in the header and footer
 const BOT_NAME      = 'BADDIES BOT';  // shown in the footer as "<BOT_NAME> SYSTEM"
-const SERVER_EMOJI  = '🎃';       // change it to any emoji you like
+const SERVER_EMOJI  = '';         // optional emoji before the server name ('' = none)
 const BULLET        = '▼';
 const EMBED_COLOR   = 0x0b0b0f;   // near-black, matches the dark card
 const BANNER_GIF    =
@@ -23,6 +22,11 @@ function fancy(text) {
   }).join('');
 }
 
+/** The server's own name (set automatically), styled, with the optional emoji. */
+function serverTag(guild) {
+  return [SERVER_EMOJI, fancy(guild.name || 'this server')].filter(Boolean).join(' ');
+}
+
 /**
  * Builds the welcome payload (content + embed) for a member.
  * Exported so the same card can be reused from a guildMemberAdd handler later.
@@ -32,7 +36,7 @@ function buildWelcome(member, { invitedBy = 'Unknown', inviteCode = 'Unknown' } 
   const user  = member.user ?? member;
 
   const description = [
-    `### ${BULLET} **WELCOME TO ${SERVER_EMOJI} *${fancy(SERVER_NAME)}***`,
+    `### ${BULLET} **WELCOME TO ${serverTag(guild)}**`,
     `**${toSmallCaps('WELCOME')}** <@${user.id}>!`,
     '',
     `${BULLET} **Invited By:** ${invitedBy}`,
@@ -50,7 +54,7 @@ function buildWelcome(member, { invitedBy = 'Unknown', inviteCode = 'Unknown' } 
     .setThumbnail(thumbnail)
     .setImage(BANNER_GIF)
     .setFooter({
-      text: `${BOT_NAME} SYSTEM • ${SERVER_EMOJI} ${fancy(SERVER_NAME)}`,
+      text: `${BOT_NAME} SYSTEM • ${serverTag(guild)}`,
       iconURL: guild.iconURL({ extension: 'png', size: 64 }) ?? undefined,
     });
 
@@ -71,4 +75,4 @@ async function execute(message, args) {
   await message.channel.send(buildWelcome(member));
 }
 
-module.exports = { name: 'welcome', description: 'Send the Astral welcome card', execute, buildWelcome };
+module.exports = { name: 'welcome', description: 'Send the welcome card', execute, buildWelcome };
