@@ -9,6 +9,31 @@ const config = require('../config/bot');
 const logger = require('./logger');
 const { cleanEmbed, kv } = require('../embeds/factories/clean');
 
+let Setting = null;
+try { Setting = require('../database/models/Setting'); } catch (_) { Setting = null; }
+let mongoose = null;
+try { mongoose = require('mongoose'); } catch (_) { mongoose = null; }
+const dbReady = () => !!(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
+
+// Log channel chosen with +logs (guildId -> channelId). Beats the env settings.
+const savedChannels = new Map();
+const isLogChannel = (id) => id === config.logChannelId || [...savedChannels.values()].includes(id);
+
+async function loadSavedChannels() {
+  if (!Setting || !dbReady()) return;
+  try {
+    const rows = await Setting.find({ logChannelId: { $ne: '' } }).lean();
+    for (const r of rows) savedChannels.set(r.guildId, r.logChannelId);
+  } catch (err) { logger.warn(`Load log channels failed: ${err.message}`); }
+}
+
+async function setLogChannel(guildId, channelId) {
+  if (channelId) savedChannels.set(guildId, channelId); else savedChannels.delete(guildId);
+  if (Setting && dbReady()) {
+    await Setting.updateOne({ guildId }, { $set: { logChannelId: channelId, updatedAt: new Date() } }, { upsert: true });
+  }
+}
+
 const COLORS = { red: 0xed4245, green: 0x57f287, amber: 0xfee75c, neutral: 0x2b2d31 };
 const AUDIT_WINDOW_MS = 15_000;
 
@@ -37,6 +62,14 @@ function getWebhook() {
 
 async function send(client, guild, embed) {
   try {
+    const savedId = guild && savedChannels.get(guild.id);
+    if (savedId) {
+      const ch = guild.channels.cache.get(savedId) || await guild.channels.fetch(savedId).catch(() => null);
+      if (ch && ch.isTextBased()) {
+        await ch.send({ embeds: [embed], allowedMentions: { parse: [] } });
+        return;
+      }
+    }
     const hook = getWebhook();
     if (hook) {
       await hook.send({ username: 'BADDIES Logs', avatarURL: client.user?.displayAvatarURL?.({ size: 128 }), embeds: [embed], allowedMentions: { parse: [] } });
@@ -81,13 +114,50 @@ async function findExecutor(guild, type, targetId) {
 
 function init(client) {
   if (!config.logWebhookUrl && !config.logChannelId) {
-    logger.warn('Server logs are off: set LOG_WEBHOOK_URL in Railway to turn them on.');
+    logger.warn('Server logs: no env log target set. Use +logs in Discord to create a log channel.');
   }
+
+  /* ── Profile snapshots (to detect username / display name / avatar edits) ── */
+  const profiles = new Map();
+  const snap = (u) => ({ username: u.username, globalName: u.globalName ?? null, avatar: u.avatar ?? null });
+
+  client.on('ready', async () => {
+    await loadSavedChannels();
+    for (const [, guild] of client.guilds.cache) {
+      for (const [, m] of guild.members.cache) profiles.set(m.id, snap(m.user));
+    }
+  });
+
+  async function logProfileEdit(user, guilds) {
+    const prev = profiles.get(user.id);
+    const now = snap(user);
+    profiles.set(user.id, now);
+    if (!prev) return;
+    const changes = [];
+    if (prev.username !== now.username) changes.push({ name: '▾ Username', value: `${clip(prev.username, 100)} → ${clip(now.username, 100)}`, inline: false });
+    if (prev.globalName !== now.globalName) changes.push({ name: '▾ Display Name', value: `${prev.globalName || '*None*'} → ${now.globalName || '*None*'}`, inline: false });
+    if (prev.avatar !== now.avatar) changes.push({ name: '▾ Avatar', value: `Changed — [new avatar](${user.displayAvatarURL({ size: 256 })})`, inline: false });
+    if (!changes.length) return;
+    for (const guild of guilds) {
+      await send(client, guild, logEmbed({
+        client, title: 'Profile Edited', color: COLORS.neutral, user,
+        fields: [kv('Member', userLines(user)), kv('Time', [ts()]), ...changes],
+      }));
+    }
+  }
+
+  // Fires when Discord pushes a user change (needs the Presences intent to be reliable)
+  client.on('userUpdate', async (_old, newUser) => {
+    try {
+      const guilds = client.guilds.cache.filter(g => g.members.cache.has(newUser.id)).map(g => g);
+      await logProfileEdit(newUser, guilds);
+    } catch (err) { logger.warn(`userUpdate log: ${err.message}`); }
+  });
 
   /* ── Messages ── */
   client.on('messageDelete', async (message) => {
     try {
-      if (!message.guild || message.channelId === config.logChannelId) return;
+      if (!message.guild || isLogChannel(message.channelId)) return;
       if (message.author?.bot) return;
       const attachments = message.attachments?.size
         ? [...message.attachments.values()].map(a => a.url).join('\n') : null;
@@ -104,7 +174,7 @@ function init(client) {
 
   client.on('messageDeleteBulk', async (messages, channel) => {
     try {
-      if (!channel?.guild || channel.id === config.logChannelId) return;
+      if (!channel?.guild || isLogChannel(channel.id)) return;
       await send(client, channel.guild, logEmbed({
         client, title: 'Messages Purged', color: COLORS.red,
         fields: [kv('Channel', [`<#${channel.id}>`]), kv('Amount', [String(messages.size)]), kv('Time', [ts()])],
@@ -114,7 +184,7 @@ function init(client) {
 
   client.on('messageUpdate', async (oldMsg, newMsg) => {
     try {
-      if (!newMsg.guild || newMsg.channelId === config.logChannelId) return;
+      if (!newMsg.guild || isLogChannel(newMsg.channelId)) return;
       if (newMsg.author?.bot) return;
       if (oldMsg.content === newMsg.content) return;
       const fields = [
@@ -133,6 +203,8 @@ function init(client) {
     try {
       const guild = newMember.guild;
       const user = newMember.user;
+
+      await logProfileEdit(user, [guild]);
 
       if (!oldMember.partial) {
         const added = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id));
@@ -185,6 +257,7 @@ function init(client) {
   /* ── Joins, leaves, kicks ── */
   client.on('guildMemberAdd', async (member) => {
     try {
+      profiles.set(member.id, snap(member.user));
       const age = Math.floor((Date.now() - member.user.createdTimestamp) / 86_400_000);
       await send(client, member.guild, logEmbed({
         client, title: 'Member Joined', color: COLORS.green, user: member.user,
@@ -247,4 +320,4 @@ function init(client) {
   });
 }
 
-module.exports = { init };
+module.exports = { init, setLogChannel };
