@@ -29,8 +29,10 @@ const client = new Client({
 global.client = client;
 require('./utils/inviteTracker').init(client);
 require('./utils/giveaway').init(client);
+require('./utils/dmallSlash').init(client);
 require('./utils/boostAnnounce').init(client);
 require('./utils/serverLogs').init(client);
+client.once('ready', () => require('./utils/autoRole').load());
 
 async function bootstrap() {
   await connectDB(config.mongoUri);
