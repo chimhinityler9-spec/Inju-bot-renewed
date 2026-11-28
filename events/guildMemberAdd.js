@@ -3,6 +3,7 @@ const config = require('../config/bot');
 const logger = require('../utils/logger');
 const { buildWelcome } = require('../commands/welcome');
 const { resolveInvite } = require('../utils/inviteTracker');
+const autoRole = require('../utils/autoRole');
 
 function findWelcomeChannel(guild) {
   const id = process.env.WELCOME_CHANNEL_ID;
@@ -20,6 +21,16 @@ module.exports = {
   name: 'guildMemberAdd',
   async execute(member) {
     if (member.user.bot) return;
+
+    try {
+      const autoRoleId = autoRole.getAutoRole(member.guild.id);
+      if (autoRoleId) {
+        const role = member.guild.roles.cache.get(autoRoleId);
+        if (role) await member.roles.add(role).catch((err) => logger.error(`Autorole add failed: ${err.message}`));
+      }
+    } catch (err) {
+      logger.error(`Autorole error: ${err.message}`);
+    }
 
     try {
       const user = await User.findOne({ discordId: member.id, verified: true });
