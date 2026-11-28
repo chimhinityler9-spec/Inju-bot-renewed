@@ -89,12 +89,58 @@ const CATEGORIES = {
 };
 
 
-const SITE_URL     = 'https://aslsite.vercel.app/';
-const HIDELINK_URL = 'https://aslv2h.vvzx.workers.dev/';
 const BOT_NAME     = 'BADDIES';
 const EMBED_COLOR  = 0x0b0b0f;
 
 const OVERVIEW_KEY = 'overview';
+
+// Any command file in /commands not already listed by hand above shows up here
+// automatically — so a brand-new command appears in +help without editing this file.
+function _listedNames() {
+  const names = new Set(['help']);
+  for (const cat of Object.values(CATEGORIES)) {
+    for (const c of cat.commands) names.add(c.name.split(' ')[0].replace(/^[!+]/, '').toLowerCase());
+  }
+  return names;
+}
+
+function _discoverNewCommands() {
+  const fs = require('fs');
+  const path = require('path');
+  const listed = _listedNames();
+  const dir = path.join(__dirname);
+  let files;
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.js')); } catch (_) { return []; }
+
+  const extras = [];
+  for (const file of files) {
+    const base = file.replace(/\.js$/, '');
+    if (listed.has(base.toLowerCase())) continue;
+    try {
+      const mod = require(path.join(dir, file));
+      if (!mod || !mod.name || typeof mod.execute !== 'function') continue;
+      extras.push({ name: mod.name, desc: mod.description || 'No description set.' });
+    } catch (_) { /* skip files that fail to load */ }
+  }
+  return extras;
+}
+
+function _categoriesWithExtras() {
+  const extras = _discoverNewCommands();
+  if (!extras.length) return CATEGORIES;
+  return {
+    ...CATEGORIES,
+    new: {
+      emoji: '🆕',
+      glyph: '🆕',
+      banner: null,
+      label: 'New Commands',
+      description: 'Recently added commands',
+      color: theme.DARK_BLUE,
+      commands: extras,
+    },
+  };
+}
 
 function _categoryList() {
   return Object.entries(CATEGORIES).map(([key, cat]) => ({
@@ -137,7 +183,7 @@ function buildHubEmbed(client, user) {
     ? `${Math.round(client.ws.ping)}ms` : 'N/A';
   const p = config.prefix;
   const total = new Set(
-    Object.values(CATEGORIES).flatMap(cat => cat.commands.map(c => c.name.split(' ')[0])),
+    Object.values(_categoriesWithExtras()).flatMap(cat => cat.commands.map(c => c.name.split(' ')[0])),
   ).size;
 
   const description = [
@@ -165,7 +211,7 @@ function buildHubEmbed(client, user) {
 
 function buildCategoryEmbed(key, client, user) {
   if (key === OVERVIEW_KEY) return buildHubEmbed(client, user);
-  const cat = CATEGORIES[key];
+  const cat = _categoriesWithExtras()[key];
   if (!cat) return new EmbedBuilder().setColor(EMBED_COLOR).setTitle('Unknown Category').setDescription('That category does not exist.');
 
   const lines = cat.commands.map(c => `**\`${config.prefix}${c.name.replace(/^[!+]/, '')}\`**\n${c.desc}`).join('\n\n');
@@ -189,7 +235,7 @@ function buildHelpSelector(selected = OVERVIEW_KEY) {
     emoji: '🏠',
     default: selected === OVERVIEW_KEY,
   }];
-  for (const [key, cat] of Object.entries(CATEGORIES)) {
+  for (const [key, cat] of Object.entries(_categoriesWithExtras())) {
     const summary = _dropdownSummary(cat, p);
     options.push({
       label: cat.label,
@@ -208,18 +254,8 @@ function buildHelpSelector(selected = OVERVIEW_KEY) {
   return new ActionRowBuilder().addComponents(menu);
 }
 
-function buildLinkRow() {
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setLabel('Main Site').setStyle(ButtonStyle.Link).setURL(SITE_URL),
-  );
-  if (HIDELINK_URL) {
-    row.addComponents(new ButtonBuilder().setLabel('Hidden Tool').setStyle(ButtonStyle.Link).setURL(HIDELINK_URL));
-  }
-  return row;
-}
-
 function buildHelpComponents(selected = OVERVIEW_KEY) {
-  return [buildHelpSelector(selected), buildLinkRow()];
+  return [buildHelpSelector(selected)];
 }
 
 async function execute(message, args, client) {
